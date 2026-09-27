@@ -35,7 +35,7 @@ problèmes rencontrés et résolus.
 ├── résultats_de_la_couche_silver.md            → contrôles, volumes conservés/rejetés en Silver
 ├── résultats_de_la_couche_gold.md              → résultat final des agrégats Gold
 ├── analyse-resultats.md                        → lecture et interprétation des résultats BI
-├── PROBLEMES.md                                → incidents rencontrés pendant le build et leur résolution
+├── problèmes.md                                → incidents rencontrés pendant le build et leur résolution
 └── Dashboard.pdf                            → aperçu du dashboard final
 ```
 
@@ -195,7 +195,7 @@ Lance Postgres, RustFS (avec création automatique des buckets
 `bronze`/`silver`/`gold`), le webserver Dagster et le daemon.
 
 > Si tu rencontres une erreur au démarrage (build, connexion à Postgres,
-> lancement de Spark), regarde d'abord [PROBLEMES.md](PROBLEMES.md) -
+> lancement de Spark), regarde d'abord [problèmes.md](problèmes.md) -
 > j'y documente les incidents que j'ai eu pendant le développement et
 > comment je les ai résolus, plusieurs sont liés à l'environnement local
 > (architecture Mac Apple Silicon notamment).
