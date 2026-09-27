@@ -30,13 +30,13 @@ problèmes rencontrés et résolus.
 ├── dagster_project/                           → code du pipeline (assets, resources, Dockerfile)
 ├── scripts/                                   → téléchargement des données brutes (API SODA)
 ├── data/                                       → CSV brut téléchargé (monté en volume, non versionné)
-├── dashboard/                                  → app Streamlit de visualisation des tables gold
+├── dashboard/                                  → app Streamlit de création du Dashboard pour  les tables gold
 ├── analyse_exploratoire_des_valeurs_aberrantes.md  → étude Bronze avant de définir les règles Silver
 ├── résultats_de_la_couche_silver.md            → contrôles, volumes conservés/rejetés en Silver
 ├── résultats_de_la_couche_gold.md              → résultat final des agrégats Gold
 ├── analyse-resultats.md                        → lecture et interprétation des résultats BI
 ├── PROBLEMES.md                                → incidents rencontrés pendant le build et leur résolution
-└── Visualisation.pdf                            → aperçu du dashboard final
+└── Dashboard.pdf                            → aperçu du dashboard final
 ```
 
 ## Architecture
@@ -297,7 +297,7 @@ Le dashboard est ensuite accessible sur [http://localhost:8501](http://localhost
 Le dashboard permet de filtrer par période, de visualiser les tendances de
 revenus et de durée avec les événements clés surlignés (marathon, etc.), et
 d'explorer une carte des zones les plus fréquentées et les plus rentables.
-Un aperçu est disponible dans [Visualisation.pdf](Visualisation.pdf).
+Un aperçu est disponible dans [Dashboard.pdf](Dashboard.pdf).
 
 L'analyse et l'interprétation des résultats observés dans le dashboard sont
 détaillées dans [analyse-resultats.md](analyse-resultats.md).
