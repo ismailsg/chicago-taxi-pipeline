@@ -111,8 +111,7 @@ MAX_TRIP_MILES = 100.0
 
 La vitesse moyenne est une variable dérivée calculée par la formule :
 
-$$\text{Vitesse (mph)} = \frac{\text{Distance (miles)}}{\text{Durée (heures)}} = \frac{\text{trip\_miles}}{\text{trip\_seconds} / 3600}$$
-
+$$\text{Vitesse (mph)} = \frac{\text{Distance (miles)}}{\text{Durée (heures)}} = \frac{\text{trip miles}}{\text{trip seconds} / 3600}$$
 | Statistique / Percentile | Valeur |
 | :--- | ---: |
 | Minimum | 0,00 mph |
