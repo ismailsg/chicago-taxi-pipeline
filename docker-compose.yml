@@ -1,0 +1,178 @@
+x-dagster-env: &dagster-env
+  DAGSTER_POSTGRES_USER: dagster
+  DAGSTER_POSTGRES_PASSWORD: dagster
+  DAGSTER_POSTGRES_DB: dagster
+  DAGSTER_HOME: /opt/dagster/dagster_home
+
+  PYTHONPATH: /opt/dagster/app
+  # S3 / RustFS
+  S3_ENDPOINT: http://rustfs:9000
+  S3_ACCESS_KEY: taxiadmin
+  S3_SECRET_KEY: taxiadmin-secret
+
+services:
+
+  # --------------------------------------------------
+  # PostgreSQL
+  # --------------------------------------------------
+  postgres:
+    image: postgres:15
+    container_name: taxi_postgres
+
+    environment:
+      POSTGRES_USER: dagster
+      POSTGRES_PASSWORD: dagster
+      POSTGRES_DB: dagster
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+    ports:
+      - "5432:5432"
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dagster"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+
+  # --------------------------------------------------
+  # RustFS
+  # S3-compatible object storage
+  # --------------------------------------------------
+  rustfs:
+    image: rustfs/rustfs:latest
+    container_name: taxi_rustfs
+
+    environment:
+      RUSTFS_ACCESS_KEY: taxiadmin
+      RUSTFS_SECRET_KEY: taxiadmin-secret
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: ":9000"
+      RUSTFS_CONSOLE_ADDRESS: ":9001"
+      RUSTFS_CONSOLE_ENABLE: "true"
+
+    volumes:
+      - rustfs_data:/data
+
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "-sf",
+          "http://127.0.0.1:9000/health"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+
+  # --------------------------------------------------
+  # Create Bronze / Silver / Gold buckets
+  # --------------------------------------------------
+  rustfs-init:
+    build:
+      context: ./dagster_project
+
+    container_name: taxi_rustfs_init
+
+    depends_on:
+      rustfs:
+        condition: service_healthy
+
+    environment:
+      S3_ENDPOINT: http://rustfs:9000
+      S3_ACCESS_KEY: taxiadmin
+      S3_SECRET_KEY: taxiadmin-secret
+
+    volumes:
+      - ./scripts:/opt/dagster/app/scripts
+
+    entrypoint:
+      - python
+      - /opt/dagster/app/scripts/init_minio.py
+
+
+  # --------------------------------------------------
+  # Dagster Webserver
+  # --------------------------------------------------
+  dagster-webserver:
+    build:
+      context: ./dagster_project
+
+    container_name: taxi_dagster_webserver
+
+    entrypoint:
+      - dagster-webserver
+      - -h
+      - "0.0.0.0"
+      - -p
+      - "3000"
+      - -w
+      - workspace.yaml
+
+    environment:
+      <<: *dagster-env
+      DAGSTER_DISABLE_TELEMETRY: "1"
+    ports:
+      - "3000:3000"
+
+    volumes:
+      - ./dagster_project:/opt/dagster/app
+      - ./scripts:/opt/dagster/scripts
+      - dagster_home:/opt/dagster/dagster_home
+      - ./data:/opt/dagster/app/local_data
+      - ./dashboard:/opt/dagster/app/dashboard
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+      rustfs-init:
+        condition: service_completed_successfully
+
+
+  # --------------------------------------------------
+  # Dagster Daemon
+  # --------------------------------------------------
+  dagster-daemon:
+    build:
+      context: ./dagster_project
+
+    container_name: taxi_dagster_daemon
+
+    entrypoint:
+      - dagster-daemon
+      - run
+
+    environment:
+      <<: *dagster-env
+
+    volumes:
+      - ./dagster_project:/opt/dagster/app
+      - ./scripts:/opt/dagster/scripts
+      - dagster_home:/opt/dagster/dagster_home
+      - ./data:/opt/dagster/app/local_data
+      - ./dashboard:/opt/dagster/app/dashboard
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+      rustfs-init:
+        condition: service_completed_successfully
+
+
+# --------------------------------------------------
+# Persistent volumes
+# --------------------------------------------------
+volumes:
+  postgres_data:
+  rustfs_data:
+  dagster_home:

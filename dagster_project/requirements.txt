@@ -1,0 +1,14 @@
+dagster==1.8.12
+dagster-webserver==1.8.12
+dagster-postgres==0.24.12
+psycopg2-binary==2.9.9
+SQLAlchemy==2.0.36
+dagster-aws==0.24.12
+pyspark==3.5.3
+pandas==2.2.2
+requests==2.32.3
+boto3==1.35.0
+duckdb==1.1.1
+python-dotenv==1.0.1
+streamlit==1.39.0
+plotly==5.24.1
