@@ -4,7 +4,7 @@ Le dashboard couvre l'activité des taxis à Chicago entre juillet et décembre 
 
 ## 1. Trajets et revenus ne bougent pas toujours ensemble
 
-Première chose frappante en regardant les courbes jour par jour : plus de trajets ne veut pas dire plus d'argent généré. Le 12 octobre 2023 est la journée la plus rentable de toute la période, avec 21 564 trajets pour environ 587 018 $ de revenus. Mais trois jours plus tôt, le 9 octobre, on observe presque autant d'activité (18 006 trajets) pour un revenu quasi identique, plus de 571 000 $, avec un panier moyen par trajet nettement plus élevé (31,82 $).
+Première chose frappante en regardant les courbes jour par jour : plus de trajets ne veut pas dire plus d'argent généré. Le 12 octobre 2023 est la journée la plus rentable de toute la période, avec 21 564 trajets pour environ 587 018 $ de revenus. Mais trois jours plus tôt, le 9 octobre, on observe presque autant d'activité (18 006 trajets) pour un revenu quasi identique, plus de 571 000 $ avec un panier moyen par trajet nettement plus élevé (31,82 $).
 
 Autrement dit, une journée avec moins de courses peut rapporter presque autant, simplement parce que les trajets sont en moyenne plus longs ou plus chers. C'est le genre de nuance qu'on rate si on ne regarde que le nombre de trajets sans le croiser avec le revenu moyen.
 
