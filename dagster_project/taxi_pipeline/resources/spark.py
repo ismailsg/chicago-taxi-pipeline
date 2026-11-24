@@ -26,7 +26,7 @@ class SparkResource(ConfigurableResource):
         spark = (
             SparkSession.builder
             .appName(self.app_name)
-            .master("local[*]")
+            .master("local[2]")
             .config(
                 "spark.hadoop.fs.s3a.endpoint",
                 s3_endpoint,
@@ -53,8 +53,12 @@ class SparkResource(ConfigurableResource):
             )
             .config(
                 "spark.sql.shuffle.partitions",
-                "8",
+                "32",
             )
+            .config("spark.driver.maxResultSize", "1g")
+            .config("spark.memory.fraction", "0.7")
+            .config("spark.memory.storageFraction", "0.3")
+            .config("spark.sql.adaptive.enabled", "true")
             .getOrCreate()
         )
 
@@ -65,6 +69,7 @@ class SparkResource(ConfigurableResource):
 
 BRONZE_PATH = "s3a://bronze/taxi_trips"
 SILVER_PATH = "s3a://silver/taxi_trips_clean"
+QUARANTINE_PATH = "s3a://silver/taxi_trips_quarantine"
 
 GOLD_REVENUE_BY_DAY = "s3a://gold/revenue_by_day"
 GOLD_AVG_TRIP_DURATION = "s3a://gold/avg_trip_duration"

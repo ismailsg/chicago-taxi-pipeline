@@ -1,11 +1,14 @@
 
-from dagster import asset, AssetExecutionContext
+from dagster import asset, AssetExecutionContext, Config, MetadataValue
 from pyspark.sql import functions as F
+from pyspark import StorageLevel
+from pyspark.sql.window import Window
 
 from taxi_pipeline.resources.spark import (
     SparkResource,
     BRONZE_PATH,
     SILVER_PATH,
+    QUARANTINE_PATH,
 )
 
 
@@ -13,13 +16,29 @@ from taxi_pipeline.resources.spark import (
 # Règles métier définies à partir du profiling du dataset
 # ---------------------------------------------------------------------------
 
-MIN_TRIP_SECONDS = 1
-MAX_TRIP_SECONDS = 6 * 3600       # 6 heures
+class SilverConfig(Config):
+    min_trip_seconds: int = 1
+    max_trip_seconds: int = 6 * 3600
+    min_trip_miles: float = 0
+    max_trip_miles: float = 100
+    max_speed_mph: float = 100
 
-MIN_TRIP_MILES = 0
-MAX_TRIP_MILES = 100              # 100 miles
 
-MAX_SPEED_MPH = 100
+REQUIRED_BRONZE_COLUMNS = {
+    "trip_id",
+    "trip_start_timestamp",
+    "trip_end_timestamp",
+    "trip_seconds",
+    "trip_miles",
+    "fare",
+    "tips",
+    "tolls",
+    "extras",
+    "trip_total",
+    "pickup_community_area",
+    "dropoff_community_area",
+    "trip_date",
+}
 
 
 @asset(
@@ -29,6 +48,7 @@ MAX_SPEED_MPH = 100
 def silver_taxi_trips(
     context: AssetExecutionContext,
     spark: SparkResource,
+    config: SilverConfig,
 ):
     """
     Nettoyage et normalisation des trajets taxi.
@@ -38,13 +58,12 @@ def silver_taxi_trips(
 
     Transformations :
         - typage explicite des colonnes
-        - suppression des doublons sur trip_id
-        - validation de la durée
-        - validation de la distance
+        - déduplication déterministe sur trip_id
+        - étiquetage en une passe des motifs de rejet
         - calcul de la vitesse moyenne
-        - suppression des vitesses incohérentes
-        - validation des montants
-        - validation des zones géographiques
+        - écriture Silver partitionnée
+        - écriture de la quarantaine partitionnée
+        - vérification du volume écrit
     """
 
     s = spark.get_spark()
@@ -56,6 +75,16 @@ def silver_taxi_trips(
     df = s.read.parquet(BRONZE_PATH)
 
     total_bronze = df.count()
+
+    missing_columns = sorted(REQUIRED_BRONZE_COLUMNS - set(df.columns))
+    if missing_columns:
+        raise ValueError(
+            "Le schéma Bronze est incomplet. Colonnes manquantes : "
+            + ", ".join(missing_columns)
+        )
+
+    if total_bronze == 0:
+        raise ValueError("Le jeu de données Bronze est vide")
 
     context.log.info(
         f"Nombre de lignes en Bronze : {total_bronze:,}"
@@ -106,97 +135,26 @@ def silver_taxi_trips(
     )
 
     # -----------------------------------------------------------------------
-    # 3. Identifiant du trajet
+    # 3. Déduplication déterministe
     # -----------------------------------------------------------------------
 
-    before = df.count()
-
-    df = (
-        df
-        .filter(F.col("trip_id").isNotNull())
-        .dropDuplicates(["trip_id"])
-    )
-
-    after = df.count()
-
-    context.log.info(
-        f"Validation trip_id : {before - after:,} lignes supprimées"
-    )
-
-    # -----------------------------------------------------------------------
-    # 4. Cohérence temporelle
-    # -----------------------------------------------------------------------
-
-    before = df.count()
-
-    df = (
-        df
-        .filter(F.col("trip_start_timestamp").isNotNull())
-        .filter(F.col("trip_end_timestamp").isNotNull())
-        .filter(
-            F.col("trip_end_timestamp")
-            >= F.col("trip_start_timestamp")
+    duplicate_window = (
+        Window
+        .partitionBy("trip_id")
+        .orderBy(
+            F.col("trip_end_timestamp").desc_nulls_last(),
+            F.col("trip_start_timestamp").desc_nulls_last(),
+            F.col("trip_total").desc_nulls_last(),
         )
     )
 
-    after = df.count()
-
-    context.log.info(
-        f"Validation timestamps : {before - after:,} lignes supprimées"
+    df = df.withColumn(
+        "_duplicate_rank",
+        F.row_number().over(duplicate_window),
     )
 
     # -----------------------------------------------------------------------
-    # 5. Durée du trajet
-    #
-    # Le profiling montre :
-    #   P99.9 ≈ 10 735 secondes
-    #   maximum = 86 382 secondes
-    #
-    # Une limite de 6 heures permet de conserver les trajets extrêmes
-    # tout en éliminant les valeurs proches de 24 heures.
-    # -----------------------------------------------------------------------
-
-    before = df.count()
-
-    df = (
-        df
-        .filter(F.col("trip_seconds") >= MIN_TRIP_SECONDS)
-        .filter(F.col("trip_seconds") <= MAX_TRIP_SECONDS)
-    )
-
-    after = df.count()
-
-    context.log.info(
-        f"Validation durée : {before - after:,} lignes supprimées"
-    )
-
-    # -----------------------------------------------------------------------
-    # 6. Distance
-    #
-    # Le profiling montre :
-    #   P99.9 ≈ 43.4 miles
-    #   maximum = 921.1 miles
-    #
-    # Une limite de 100 miles permet de conserver une marge importante
-    # au-dessus des valeurs observées dans la distribution normale.
-    # -----------------------------------------------------------------------
-
-    before = df.count()
-
-    df = (
-        df
-        .filter(F.col("trip_miles") >= MIN_TRIP_MILES)
-        .filter(F.col("trip_miles") <= MAX_TRIP_MILES)
-    )
-
-    after = df.count()
-
-    context.log.info(
-        f"Validation distance : {before - after:,} lignes supprimées"
-    )
-
-    # -----------------------------------------------------------------------
-    # 7. Vitesse moyenne
+    # 4-9. Calcul de la vitesse et étiquetage d'une seule raison de rejet
     # -----------------------------------------------------------------------
 
     df = df.withColumn(
@@ -205,111 +163,130 @@ def silver_taxi_trips(
         / (F.col("trip_seconds") / F.lit(3600)),
     )
 
-    before = df.count()
-
-    df = df.filter(
-        F.col("trip_speed_mph") <= MAX_SPEED_MPH
-    )
-
-    after = df.count()
-
-    context.log.info(
-        f"Validation vitesse : {before - after:,} lignes supprimées"
-    )
-
-    # -----------------------------------------------------------------------
-    # 8. Montants financiers
-    #
-    # On conserve les montants nuls mais on élimine les valeurs négatives.
-    # -----------------------------------------------------------------------
-
-    before = df.count()
-
-    df = (
-        df
-        .filter(
-            F.col("fare").isNull()
-            | (F.col("fare") >= 0)
+    df = df.withColumn(
+        "reject_reason",
+        F.when(F.col("trip_id").isNull(), "null_trip_id")
+        .when(F.col("_duplicate_rank") > 1, "duplicate_trip_id")
+        .when(
+            F.col("trip_start_timestamp").isNull()
+            | F.col("trip_end_timestamp").isNull()
+            | (F.col("trip_end_timestamp") < F.col("trip_start_timestamp")),
+            "invalid_timestamp",
         )
-        .filter(
-            F.col("tips").isNull()
-            | (F.col("tips") >= 0)
+        .when(
+            F.col("trip_seconds").isNull()
+            | (F.col("trip_seconds") < config.min_trip_seconds)
+            | (F.col("trip_seconds") > config.max_trip_seconds),
+            "invalid_duration",
         )
-        .filter(
-            F.col("tolls").isNull()
-            | (F.col("tolls") >= 0)
+        .when(
+            F.col("trip_miles").isNull()
+            | (F.col("trip_miles") < config.min_trip_miles)
+            | (F.col("trip_miles") > config.max_trip_miles),
+            "invalid_distance",
         )
-        .filter(
-            F.col("extras").isNull()
-            | (F.col("extras") >= 0)
+        .when(
+            F.col("trip_speed_mph").isNull()
+            | (F.col("trip_speed_mph") > config.max_speed_mph),
+            "invalid_speed",
         )
-        .filter(
-            F.col("trip_total").isNull()
-            | (F.col("trip_total") >= 0)
+        .when(
+            ((F.col("fare").isNotNull()) & (F.col("fare") < 0))
+            | ((F.col("tips").isNotNull()) & (F.col("tips") < 0))
+            | ((F.col("tolls").isNotNull()) & (F.col("tolls") < 0))
+            | ((F.col("extras").isNotNull()) & (F.col("extras") < 0))
+            | ((F.col("trip_total").isNotNull()) & (F.col("trip_total") < 0)),
+            "negative_amount",
         )
+        .when(
+            F.col("pickup_community_area").isNull()
+            | F.col("dropoff_community_area").isNull(),
+            "missing_geography",
+        )
+        .otherwise("valid"),
     )
 
-    after = df.count()
+    df.persist(StorageLevel.DISK_ONLY)
 
-    context.log.info(
-        f"Validation montants : {before - after:,} lignes supprimées"
+    reject_counts = (
+        df.groupBy("reject_reason")
+        .count()
+        .collect()
+    )
+    rejection_counts = {
+        row["reject_reason"]: row["count"]
+        for row in reject_counts
+    }
+
+    total_silver = rejection_counts.get("valid", 0)
+    total_rejected = total_bronze - total_silver
+    retention_rate = (total_silver / total_bronze) * 100
+
+    for reason, count in sorted(rejection_counts.items()):
+        if reason != "valid":
+            context.log.info(
+                f"Rejets {reason} : {count:,} lignes"
+            )
+
+    context.log.info(f"Nombre de lignes en Silver : {total_silver:,}")
+    context.log.info(f"Nombre total rejeté : {total_rejected:,}")
+    context.log.info(f"Taux de conservation : {retention_rate:.2f}%")
+
+    quarantine = df.filter(F.col("reject_reason") != "valid")
+    silver = (
+        df.filter(F.col("reject_reason") == "valid")
+        .drop("reject_reason", "_duplicate_rank")
     )
 
-    # -----------------------------------------------------------------------
-    # 9. Géographie
-    #
-    # Les analyses Gold utilisent les zones de prise en charge et de
-    # dépose. Les trajets sans ces informations ne sont donc pas conservés
-    # dans la couche Silver.
-    # -----------------------------------------------------------------------
+    if total_silver == 0:
+        raise ValueError("Le traitement n'a produit aucune ligne Silver")
 
-    before = df.count()
+    try:
+        s.conf.set("spark.sql.sources.partitionOverwriteMode", "static")
 
-    df = (
-        df
-        .filter(F.col("pickup_community_area").isNotNull())
-        .filter(F.col("dropoff_community_area").isNotNull())
-    )
+        (
+            quarantine.write
+            .mode("overwrite")
+            .partitionBy("reject_reason")
+            .parquet(QUARANTINE_PATH)
+        )
 
-    after = df.count()
+        s.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
 
-    context.log.info(
-        f"Validation géographique : {before - after:,} lignes supprimées"
-    )
+        (
+            silver.write
+            .mode("overwrite")
+            .partitionBy("trip_date")
+            .parquet(SILVER_PATH)
+        )
 
-    # -----------------------------------------------------------------------
-    # 10. Nombre final de lignes
-    # -----------------------------------------------------------------------
-
-    total_silver = df.count()
-
-    context.log.info(
-        f"Nombre de lignes en Silver : {total_silver:,}"
-    )
-
-    context.log.info(
-        f"Nombre total supprimé : "
-        f"{total_bronze - total_silver:,}"
-    )
-
-    context.log.info(
-        f"Taux de conservation : "
-        f"{(total_silver / total_bronze) * 100:.2f}%"
-    )
-
-    # -----------------------------------------------------------------------
-    # 11. Écriture Silver
-    # -----------------------------------------------------------------------
-
-    (
-        df.write
-        .mode("overwrite")
-        .partitionBy("trip_date")
-        .parquet(SILVER_PATH)
-    )
+        written_silver = s.read.parquet(SILVER_PATH).count()
+        if written_silver != total_silver:
+            raise ValueError(
+                "Vérification d'écriture Silver échouée : "
+                f"{written_silver:,} lignes relues pour "
+                f"{total_silver:,} attendues"
+            )
+    finally:
+        df.unpersist()
 
     context.log.info(
         f"Données Silver écrites dans : {SILVER_PATH}"
+    )
+    context.log.info(
+        f"Données quarantaine écrites dans : {QUARANTINE_PATH}"
+    )
+
+    context.add_output_metadata(
+        {
+            "bronze_rows": MetadataValue.int(total_bronze),
+            "silver_rows": MetadataValue.int(total_silver),
+            "rejected_rows": MetadataValue.int(total_rejected),
+            "retention_rate_pct": MetadataValue.float(retention_rate),
+            "rejection_counts": MetadataValue.json(rejection_counts),
+            "silver_path": MetadataValue.text(SILVER_PATH),
+            "quarantine_path": MetadataValue.text(QUARANTINE_PATH),
+        }
     )
 
     return None

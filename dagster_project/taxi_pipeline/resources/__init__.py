@@ -15,7 +15,11 @@ class SparkResource(ConfigurableResource):
 
         spark = (
             SparkSession.builder.appName(self.app_name)
-            .master("local[*]")
+            .master("local[2]")
+            .config("spark.driver.maxResultSize", "1g")
+            .config("spark.memory.fraction", "0.7")
+            .config("spark.memory.storageFraction", "0.3")
+            .config("spark.sql.adaptive.enabled", "true")
             .config("spark.hadoop.fs.s3a.endpoint", s3_endpoint)
             .config("spark.hadoop.fs.s3a.access.key", access_key)
             .config("spark.hadoop.fs.s3a.secret.key", secret_key)
@@ -25,7 +29,7 @@ class SparkResource(ConfigurableResource):
                 "org.apache.hadoop.fs.s3a.S3AFileSystem",
             )
             .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")
-            .config("spark.sql.shuffle.partitions", "8")
+            .config("spark.sql.shuffle.partitions", "32")
             .getOrCreate()
         )
         spark.sparkContext.setLogLevel("WARN")
@@ -35,6 +39,7 @@ class SparkResource(ConfigurableResource):
 # Chemins des buckets, un seul endroit à modifier si besoin
 BRONZE_PATH = "s3a://bronze/taxi_trips"
 SILVER_PATH = "s3a://silver/taxi_trips_clean"
+QUARANTINE_PATH = "s3a://silver/taxi_trips_quarantine"
 GOLD_REVENUE_BY_DAY = "s3a://gold/revenue_by_day"
 GOLD_AVG_TRIP_DURATION = "s3a://gold/avg_trip_duration"
 GOLD_TOP_PICKUP_ZONES = "s3a://gold/top_pickup_zones"

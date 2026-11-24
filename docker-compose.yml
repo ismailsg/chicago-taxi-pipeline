@@ -5,6 +5,7 @@ x-dagster-env: &dagster-env
   DAGSTER_HOME: /opt/dagster/dagster_home
 
   PYTHONPATH: /opt/dagster/app
+  PYSPARK_SUBMIT_ARGS: "--driver-memory 4g pyspark-shell"
   # S3 / RustFS
   S3_ENDPOINT: http://rustfs:9000
   S3_ACCESS_KEY: taxiadmin
